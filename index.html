@@ -1,0 +1,148 @@
+<html>
+<head>
+<script src="jquery-1.9.1.min.js"></script>
+<script src="riffwave.js"></script>
+<script src="reconnecting-websocket.min.js"></script>
+<script type='text/javascript'>
+
+  function log(s)
+  {
+    time = new Date();
+    $('#log').append("<p>"+time.toLocaleString()+": "+s+"</p>");
+    $("#log").scrollTop($("#log").prop("scrollHeight"));
+  }
+
+  function sigmoid(t) {
+    return 1/(1+Math.pow(Math.E, -t));
+  }
+
+
+  var connection = false;
+  var audio_mixer = new Array();
+
+
+  function addChannel() {
+    var a = new Audio();
+    a.autoplay = true;
+    //a.loop = true;
+    //a.addEventListener('ended', function(){this.currentTime=0;this.play();}, false)
+    audio_mixer.push(a);
+  }
+
+  function initAudioMixer() {
+    addChannel();
+  }
+
+  function playSound(volume, start_frequency, end_frequency, duration, channel){
+    log("playSound( vol: "+volume+"; freq: "+start_frequency+"-"+end_frequency+" )");
+    var wave = new RIFFWAVE();
+    wave.header.sampleRate = 44100; // set sample rate to 44KHz
+    wave.header.numChannels = 2;
+    wave.header.bitsPerSample = 16;
+    var max_j = duration*wave.header.sampleRate*wave.header.numChannels;
+    var j = 0;
+    var data = [];
+    while (j < max_j) {
+      var frequency = start_frequency + j*(end_frequency - start_frequency)/max_j;
+      data[j++]=volume*32767*Math.sin(0.1*j*frequency);
+      data[j++]=volume*32767*Math.sin(0.1*j*frequency);
+      data[j++]=0.5*volume*32767*Math.sin(0.1*j*start_frequency);
+      data[j++]=volume*32767*Math.sin(0.1*j*end_frequency);
+    }
+    wave.Make(data);
+    audio_mixer[channel].src = wave.dataURI;
+  }
+
+  var weighted_price = 0;
+  var sum_volume = 0;
+  var avg_price = 0;
+  var avg_volume = 0;
+  var prev_time = new Date();
+
+  function processTrade(price, volume) {
+    weighted_price = (price*volume + weighted_price * sum_volume)/(volume + sum_volume);
+    sum_volume += volume;
+
+    var cur_time = new Date();
+    var milliseconds = cur_time - prev_time;
+    if (milliseconds < 250)
+      return;
+
+    prev_time = cur_time;
+
+    if (avg_price == 0)
+    {
+      avg_price = weighted_price;
+      avg_volume = sum_volume;
+    }
+    else
+    {
+      avg_volume += (sum_volume - avg_volume)/10;
+      avg_price += (weighted_price - avg_price)/10;
+    }
+    log("weighted price: "+weighted_price+' trade volume: '+sum_volume+' avg_price: '+avg_price+' avg_vol: '+avg_volume);
+    //playSound(sigmoid(sum_volume/avg_volume-1), sigmoid(0), sigmoid(100*weighted_price/avg_price-100), 0.25, 0);
+    playSound(sigmoid(2*(sum_volume/avg_volume-1)), sigmoid(0), sigmoid(2*100*(weighted_price-avg_price)/(weighted_price)), 0.25, 0);
+
+    sum_volume = 0;
+  }
+
+  function initSocket() {
+
+    if (!('WebSocket' in window)) { document.write("Your browser doesn't support websocket :("); return; }
+      
+    connection = new ReconnectingWebSocket('ws://websocket.mtgox.com:80/mtgox');
+
+    connection.onopen = function() {
+      log('Connected to mtgox, please wait for trades...');
+      connection.send(JSON.stringify({"op" : "unsubscribe", "channel" : "24e67e0d-1cad-4cc0-9e7a-f8523ef460fe"}));
+    }
+
+    connection.onclose = function() {
+      log('Disconnected from mtgox');
+    }
+
+    connection.onerror = function(error) {
+      log('Mtgox returned error: ' + error);
+    }
+
+    connection.onmessage = function(e) {
+      var message = JSON.parse(e.data);
+      if (message.trade) {
+        console.log(message.trade);
+        if (message.trade.price_currency=="USD") {
+          log('TRADE '+message.trade.amount_int/1e8+'@'+message.trade.price+' '+message.trade.price_currency);
+          processTrade(message.trade.price, message.trade.amount_int/1e8);
+        }
+      }
+    }
+  }
+
+  $(window).bind("load", function() { 
+    initSocket(); 
+    initAudioMixer();
+  });
+
+</script>
+
+<script>
+  (function(i,s,o,g,r,a,m){i['GoogleAnalyticsObject']=r;i[r]=i[r]||function(){
+  (i[r].q=i[r].q||[]).push(arguments)},i[r].l=1*new Date();a=s.createElement(o),
+  m=s.getElementsByTagName(o)[0];a.async=1;a.src=g;m.parentNode.insertBefore(a,m)
+  })(window,document,'script','//www.google-analytics.com/analytics.js','ga');
+
+  ga('create', 'UA-2973328-19', 'ansrv.com');
+  ga('send', 'pageview');
+
+</script>
+
+</head>
+<body>
+  <h1><a href='http://ansrv.com/listen_to_mtgox'>Listen to Mt. Gox...</a></h1>
+  <p>This page contains javascript that synthesizes sounds using <a href='https://mtgox.com'>Mt. Gox</a> trade data. Loud sounds mean higher volumes, higher pitch means <a href='http://bitcoin.org'>Bitcoin</a>'s growth. Just leave this tab open in the background to get a better feeling of the market. You can also open a <a target='_blank' href='http://bitcoin.clarkmoody.com'>separate tab with realtime graphs from Clark Moody</a>. Here are some debug logs:</p>
+  <div id="log" style='border:1px solid black; height:300px;overflow:auto;'></div>
+  <p>Used components: <a href='http://jquery.com'>jquery</a>, <a href='http://codebase.es/riffwave/'>riffwave</a>, <a href='https://github.com/joewalnes/reconnecting-websocket'>reconnecting-websocket</a>. Thanks to <a href='http://www.listentobitcoin.com/'>listentobitcoin</a> too.</p>
+  <p>By <a href='https://bitcointalk.org/index.php?action=profile;u=20767'>arsenische</a>. If you find it useful, please donate to: 1289BwQxXPP5DujhigcBnjVeecWycsZTii</p>
+</p>
+</body>
+</html>
